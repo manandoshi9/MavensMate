@@ -10,7 +10,7 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
         # get request url (without url params) and remove trailing /
         config.logger.debug('>>> handling request')
         config.logger.debug(self.path)
-
+        
         request_url = self.path.split('?')[0]
         if request_url is not '/':
             request_url = request_url.rstrip('/')
@@ -39,3 +39,9 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_POST(self):
         self.main_handler('POST')
         return
+
+    def do_OPTIONS(self):           
+        self.send_response(200, "ok")       
+        self.send_header('Access-Control-Allow-Origin', '*')                
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+        self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, mm_plugin_client")    

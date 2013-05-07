@@ -39,6 +39,7 @@ class BackgroundWorker(threading.Thread):
         mm_response = None
         args = self.get_arguments()
         global_config.logger.debug('>>> running thread arguments on next line!')
+        
         global_config.logger.debug(args)
         p = subprocess.Popen("{0} {1}".format(pipes.quote(global_config.mm_path), args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
         p.stdin.write(self.payload)
