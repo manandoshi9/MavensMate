@@ -27,7 +27,7 @@ class MavensMateProject(object):
 
     def __init__(self, params={}, **kwargs):
         params = dict(params.items() + kwargs.items())
-
+        
         self.sfdc_session   = None
         self.id             = params.get('id', None)
         self.project_name   = params.get('project_name', None)

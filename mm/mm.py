@@ -14,8 +14,8 @@ from lib.mm_connection import MavensMatePluginConnection
 from lib.mm_client import MavensMateClient
 
 request_payload = util.get_request_payload()
-#config.logger.debug('\n\n\n>>>>>>>>\nhandling request with payload >>>>>')
-#config.logger.debug(request_payload)
+config.logger.debug('\n\n\n>>>>>>>>\nhandling request with payload >>>>>')
+config.logger.debug(request_payload)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--operation') #name of the operation being requested
@@ -42,7 +42,9 @@ def main():
     if args.ui_switch == True:
         #os.system('killAll MavensMateWindowServer') #TODO: try/except?
         tmp_html_file = util.generate_ui(operation,request_payload)
-        util.launch_ui(tmp_html_file)
+        print tmp_html_file
+        util.launch_ui(tmp_html_file, config.connection.chrome )
+        print tmp_html_file
         print util.generate_success_response('UI Generated Successfully')
     else:        
         if operation == 'new_project':

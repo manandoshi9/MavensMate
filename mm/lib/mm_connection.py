@@ -11,21 +11,24 @@ from mm_project import MavensMateProject
 from mm_exceptions import MMException
 
 class MavensMatePluginConnection(object):
-
+   
     currently_supported_clients = ['SUBLIME_TEXT_2', 'SUBLIME_TEXT_3']
     PluginClients = enum(SUBLIME_TEXT_2='SUBLIME_TEXT_2', SUBLIME_TEXT_3='SUBLIME_TEXT_3', NOTEPAD_PLUS_PLUS='NOTEPAD_PLUS_PLUS', TEXTMATE='TEXTMATE')
     
     def __init__(self, params={}, **kwargs):
         params = dict(params.items() + kwargs.items())
+
         self.operation              = params.get('operation', None)
         self.platform               = sys.platform
         self.plugin_client          = params.get('client', 'SUBLIME_TEXT_2') #=> "Sublime Text", "Notepad++", "TextMate"
         if self.plugin_client not in self.currently_supported_clients:
             self.plugin_client = 'SUBLIME_TEXT_2'
+        
         self.plugin_client_version  = params.get('client_version', '2.0.1') #=> "1.0", "1.1.1", "v1"
         self.plugin_client_settings = self.get_plugin_client_settings()
         self.workspace              = self.get_workspace()
         self.project_name           = params.get('project_name', None)
+
         self.project_location       = None
         if self.project_name != None:
             self.project_location = self.workspace+"/"+self.project_name
@@ -33,7 +36,7 @@ class MavensMatePluginConnection(object):
         self.project                = None
         self.sfdc_api_version       = self.get_sfdc_api_version()
         self.ui                     = params.get('ui', False) #=> whether this connection was created for the purposes of generating a UI
-        
+        self.chrome                 = self.get_chrome();
         self.setup_logging()
 
         if self.sfdc_api_version != None:
@@ -44,14 +47,14 @@ class MavensMatePluginConnection(object):
                 raise MMException('This does not seem to be a valid MavensMate project, missing config/.settings')
             if not os.path.exists(self.project_location+"/src/package.xml"):
                 raise MMException('This does not seem to be a valid MavensMate project, missing package.xml')
-
+      
         if self.project_name != None and self.project_name != '' and not os.path.exists(self.project_location) and self.operation != 'new_project_from_existing_directory' and self.operation != 'new_project':
             raise MMException('The project could not be found')
         elif self.project_name != None and self.project_name != '' and os.path.exists(self.workspace+"/"+self.project_name) and self.operation != 'new_project_from_existing_directory':
             params['location'] = self.project_location
             params['ui'] = self.ui
             self.project = MavensMateProject(params)
-
+    
     def setup_logging(self):
         if self.get_log_level() != None:
             if self.get_log_location() != None:
@@ -84,6 +87,9 @@ class MavensMatePluginConnection(object):
     def get_workspace(self):
         return self.plugin_client_settings['user']['mm_workspace']
 
+    def get_chrome(self):
+        return self.plugin_client_settings['user']['mm_chrome']
+
     #returns the MavensMate settings as a dict for the current plugin
     def get_plugin_client_settings(self):
         if self.plugin_client == self.PluginClients.SUBLIME_TEXT_2:
@@ -102,7 +108,13 @@ class MavensMatePluginConnection(object):
                     'default' : default_settings
                 }
             elif self.platform == 'linux2':
-                pass
+                
+                default_settings = mm_util.parse_json_from_file(os.path.expanduser('/home/manan/.config/sublime-text-2/Packages/MavensMate/mavensmate.sublime-settings'))
+                user_settings    = mm_util.parse_json_from_file(os.path.expanduser('/home/manan/.config/sublime-text-2/Packages/User/mavensmate.sublime-settings'))
+                return {
+                    'user'    : user_settings,
+                    'default' : default_settings
+                }
         elif self.plugin_client == self.PluginClients.SUBLIME_TEXT_3:
             if self.platform == 'darwin':
                 default_settings = mm_util.parse_json_from_file(os.path.expanduser('~/Library/Application Support/Sublime Text 3/Packages/MavensMate/mavensmate.sublime-settings'))
@@ -119,7 +131,12 @@ class MavensMatePluginConnection(object):
                     'default' : default_settings
                 }
             elif self.platform == 'linux2':
-                pass
+                default_settings = mm_util.parse_json_from_file(os.path.expanduser('/home/manan/.config/sublime-text-2/Packages/MavensMate/mavensmate.sublime-settings'))
+                user_settings    = mm_util.parse_json_from_file(os.path.expanduser('/home/manan/.config/sublime-text-2/Packages/Packages/User/mavensmate.sublime-settings'))
+                return {
+                    'user'    : user_settings,
+                    'default' : default_settings
+                }
         else:
             return None
 

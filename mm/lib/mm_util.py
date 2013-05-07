@@ -11,6 +11,7 @@ import random
 import base64
 import zipfile
 import time
+import subprocess
 import threading
 import sys
 import re
@@ -43,10 +44,6 @@ URL_TO_ENDPOINT_TYPE = {
     SANDBOX_ENDPOINT    : "sandbox",
     PRERELEASE_ENDPOINT : "prerelease"
 }
-
-template_path = config.base_path + "/lib/templates"
-
-env = Environment(loader=FileSystemLoader(template_path),trim_blocks=True)
 
 def parse_json_from_file(location):
     try:
@@ -463,9 +460,14 @@ def htmlize(seed):
     except:
         return 'Not Available'
 
-def launch_ui(tmp_html_file_location):
-    os.system("open -n '"+config.base_path+"/bin/MavensMateWindowServer.app' --args -url '"+tmp_html_file_location+"'")
-    threading.Thread(target=remove_tmp_html_file, args=(tmp_html_file_location,)).start()
+def launch_ui(tmp_html_file_location, chrome):
+    if ( sys.platform == 'osx' ):
+        os.system("open -n '"+config.base_path+"/bin/MavensMateWindowServer.app' --args -url '"+tmp_html_file_location+"'")
+        threading.Thread(target=remove_tmp_html_file, args=(tmp_html_file_location,)).start()
+    else:
+        param1 = '--app=file://%s' % tmp_html_file_location
+        subprocess.Popen([chrome, param1], stdout=subprocess.PIPE)
+        time.sleep(3)
 
 def remove_tmp_html_file(tmp_html_file_location):
     time.sleep(1)
