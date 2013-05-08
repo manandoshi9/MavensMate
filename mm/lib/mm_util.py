@@ -45,6 +45,10 @@ URL_TO_ENDPOINT_TYPE = {
     PRERELEASE_ENDPOINT : "prerelease"
 }
 
+template_path = config.base_path + "/lib/templates"
+
+env = Environment(loader=FileSystemLoader(template_path),trim_blocks=True)
+
 def parse_json_from_file(location):
     try:
         json_data = open(location)

@@ -37,6 +37,7 @@ class MavensMatePluginConnection(object):
         self.sfdc_api_version       = self.get_sfdc_api_version()
         self.ui                     = params.get('ui', False) #=> whether this connection was created for the purposes of generating a UI
         self.chrome                 = self.get_chrome();
+        self.sublime                = self.get_sublime();
         self.setup_logging()
 
         if self.sfdc_api_version != None:
@@ -89,6 +90,9 @@ class MavensMatePluginConnection(object):
 
     def get_chrome(self):
         return self.plugin_client_settings['user']['mm_chrome']
+
+    def get_sublime(self):
+        return self.plugin_client_settings['user']['mm_sublime']    
 
     #returns the MavensMate settings as a dict for the current plugin
     def get_plugin_client_settings(self):
@@ -167,11 +171,13 @@ class MavensMatePluginConnection(object):
 
             if json.loads(result)['success'] == True:
                 #opens project based on the client
-                if self.plugin_client == self.PluginClients.SUBLIME_TEXT_2:
-                    if self.platform == 'darwin':
+                
+                if self.platform == 'linux2':
+                    os.system("'" + self.sublime + "' --project '{0}'".format(self.project.location+"/"+self.project.project_name+".sublime-project"))
+                elif self.platform == 'darwin':    
+                    if self.plugin_client == self.PluginClients.SUBLIME_TEXT_2:
                         os.system("'/Applications/Sublime Text 2.app/Contents/SharedSupport/bin/subl' --project '{0}'".format(self.project.location+"/"+self.project.project_name+".sublime-project"))
-                elif self.plugin_client == self.PluginClients.SUBLIME_TEXT_3:
-                    if self.platform == 'darwin':
+                    elif self.plugin_client == self.PluginClients.SUBLIME_TEXT_3:
                         os.system("'/Applications/Sublime Text 3.app/Contents/SharedSupport/bin/subl' --project '{0}'".format(self.project.location+"/"+self.project.project_name+".sublime-project"))
 
             return result
