@@ -61,8 +61,12 @@ def main():
             new_metadata()
         elif operation == 'clean_project':
             clean_project()
+        elif operation == 'synchronize':
+            synchronize()
         elif operation == 'refresh':
             refresh()
+        elif operation == 'refresh_properties':
+            refresh_properties()
         elif operation == 'compile':
             compile_selected_metadata()
         elif operation == 'delete':
@@ -158,7 +162,7 @@ def index_metadata(args):
         html = util.generate_html_response(args.operation, index_result, request_payload)
         print util.generate_success_response(html, "html")
     else:
-        print index_result
+        print util.generate_success_response(index_result)
 
 def new_project():
     print config.connection.new_project(request_payload,action='new')
@@ -181,8 +185,15 @@ def compile_project():
 def clean_project():
     print config.connection.project.clean()
 
+def synchronize():
+    print config.connection.project.synchronize_selected_metadata(request_payload)
+
 def refresh():
     print config.connection.project.refresh_selected_metadata(request_payload)
+
+def refresh_properties():
+    config.connection.project.refresh_selected_properties(request_payload)
+    print util.generate_success_response("Refreshed Apex file properties.")
 
 def new_metadata():
     print config.connection.project.new_metadata(request_payload)
