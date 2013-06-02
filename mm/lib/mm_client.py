@@ -12,6 +12,7 @@ import shutil
 import config
 import xmltodict
 import requests
+import time
 from operator import itemgetter
 sys.path.append('../')
 
@@ -22,9 +23,7 @@ from sforce.metadata import SforceMetadataClient
 from sforce.apex import SforceApexClient
 from sforce.tooling import SforceToolingClient
 
-wsdl_path = config.base_path + "/lib/wsdl"
-#if config.frozen:
-#   wsdl_path = config.base_path
+#wsdl_path = config.base_path + "/lib/wsdl"
 
 class MavensMateClient(object):
 
@@ -59,7 +58,7 @@ class MavensMateClient(object):
             self.metadata_server_url    = self.credentials['metadata_server_url']   if 'metadata_server_url' in self.credentials else None
             self.server_url             = self.credentials['server_url']            if 'server_url' in self.credentials else None
             self.org_type               = self.credentials['org_type']              if 'org_type' in self.credentials else 'production'
-            self.endpoint               = self.credentials['endpoint']              if 'endpoint' in self.credentials else mm_util.get_sfdc_endpoint_by_type(self.org_type)
+            self.endpoint               = self.credentials['endpoint']              if 'endpoint' in self.credentials and self.credentials['endpoint'] != None else mm_util.get_sfdc_endpoint_by_type(self.org_type)
 
         #we do this to prevent an unnecessary "login" call
         #if the getUserInfo call fails, we catch it and reset our class variables 
@@ -349,6 +348,105 @@ class MavensMateClient(object):
                 #print traceback.print_exc()
                 raise e
 
+    def compile_with_tooling_api(self, file_path, container_id):
+        file_name = file_path.split('.')[0]
+        file_suffix = file_path.split('.')[-1]
+        file_name = file_name.split('/')[-1]
+        metadata_def = mm_util.get_meta_type_by_suffix(file_path.split('.')[-1])
+        metadata_type = metadata_def['xmlName']
+        payload = {}
+        if metadata_type == 'ApexPage':
+            tooling_type = 'ApexPageMember'
+        elif metadata_type == 'ApexComponent':
+            tooling_type = 'ApexComponentMember'
+        elif metadata_type == 'ApexClass':
+            tooling_type = 'ApexClassMember'
+        elif metadata_type == 'ApexTrigger':
+            tooling_type = 'ApexTriggerMember'
+
+        #create/submit "member"
+        payload['MetadataContainerId'] = container_id
+        payload['ContentEntityId'] = self.get_apex_entity_id_by_name(object_type=metadata_type, name=file_name)
+        payload['Body'] = open(file_path, 'r').read()
+        # payload['Metadata'] = {
+        #     "label": "foo",
+        #     "apiVersion": 27
+        # }
+        payload = json.dumps(payload)
+        config.logger.debug(payload)
+        r = requests.post(self.get_tooling_url()+"/sobjects/"+tooling_type, data=payload, headers=self.get_rest_headers('POST'), verify=False)
+        response = mm_util.parse_rest_response(r.text)
+        
+        #if it's a dup (probably bc we failed to delete before, let's delete and retry)
+        if type(response) is list and 'errorCode' in response[0]:
+            if response[0]['errorCode'] == 'DUPLICATE_VALUE':
+                dup_id = response[0]['message'].split(':')[-1]
+                dup_id = dup_id.strip()
+                query_string = "Select Id from "+tooling_type+" Where Id = '"+dup_id+"'"
+                r = requests.get(self.get_tooling_url()+"/query/", params={'q':query_string}, headers=self.get_rest_headers(), verify=False)
+                r.raise_for_status()
+                query_result = mm_util.parse_rest_response(r.text)
+                
+                r = requests.delete(self.get_tooling_url()+"/sobjects/{0}/{1}".format(tooling_type, query_result['records'][0]['Id']), headers=self.get_rest_headers(), verify=False)
+                r.raise_for_status()
+
+                #retry member request
+                r = requests.post(self.get_tooling_url()+"/sobjects/"+tooling_type, data=payload, headers=self.get_rest_headers('POST'), verify=False)
+                response = mm_util.parse_rest_response(r.text)
+                member_id = response['id']
+        else:
+            member_id = response['id']
+
+        #ok, now we're ready to submit an async request
+        payload = {}
+        payload['MetadataContainerId'] = container_id
+        payload['IsCheckOnly'] = False
+        payload['IsRunTests'] = False
+        payload = json.dumps(payload)
+        config.logger.debug(payload)
+        r = requests.post(self.get_tooling_url()+"/sobjects/ContainerAsyncRequest", data=payload, headers=self.get_rest_headers('POST'), verify=False)
+        response = mm_util.parse_rest_response(r.text)
+
+
+        finished = False
+        while finished == False:
+            time.sleep(1)
+            query_string = "Select Id, MetadataContainerId, MetadataContainerMemberId, State, IsCheckOnly, CompilerErrors, ErrorMsg FROM ContainerAsyncRequest WHERE Id='"+response["id"]+"'"
+            r = requests.get(self.get_tooling_url()+"/query/", params={'q':query_string}, headers=self.get_rest_headers(), verify=False)
+            r.raise_for_status()
+            query_result = mm_util.parse_rest_response(r.text)
+            if query_result["done"] == True and query_result["size"] == 1 and 'records' in query_result:
+                if query_result['records'][0]["State"] != 'Queued':
+                    response = query_result['records'][0]
+                    finished = True
+
+        #clean up the apex member
+        if 'id' in response:
+            #delete member
+            r = requests.delete(self.get_tooling_url()+"/sobjects/{0}/{1}".format(tooling_type, member_id), headers=self.get_rest_headers(), verify=False)
+            r.raise_for_status()
+
+        return response    
+
+    def get_metadata_container_id(self):
+        query_string = "Select Id from MetadataContainer Where Name = 'MavensMate-"+self.user_id+"'"
+        #print self.get_tooling_url()+"/query/"
+        r = requests.get(self.get_tooling_url()+"/query/", params={'q':query_string}, headers=self.get_rest_headers(), verify=False)
+        r.raise_for_status()
+        query_result = mm_util.parse_rest_response(r.text)
+        try:
+            return query_result['records'][0]['Id']
+        except:
+            payload = {}
+            payload['Name'] = "MavensMate-"+self.user_id
+            payload = json.dumps(payload)
+            r = requests.post(self.get_tooling_url()+"/sobjects/MetadataContainer", data=payload, headers=self.get_rest_headers('POST'), verify=False)
+            create_response = mm_util.parse_rest_response(r.text)
+            if create_response["success"] == True:
+                return create_response["id"]
+            else:
+                return "error"
+
     def get_overlay_actions(self, **kwargs):        
         if 'file_path' in kwargs:
             id = kwargs.get('id', None)
@@ -373,6 +471,15 @@ class MavensMateClient(object):
         payload = { 'q' : query_string }
         r = requests.get(self.get_tooling_url()+"/query/", params=payload, headers=self.get_rest_headers(), verify=False)
         return mm_util.parse_rest_response(r.text)    
+
+    #pass a list of apex class/trigger ids and return the symbol tables
+    def get_symbol_table(self, ids=[]):        
+        id_string = "','".join(ids)
+        id_string = "'"+id_string+"'"
+        query_string = "Select ContentEntityId, SymbolTable From ApexClassMember Where ContentEntityId IN (" + id_string + ")"
+        payload = { 'q' : query_string }
+        r = requests.get(self.get_tooling_url()+"/query/", params=payload, headers=self.get_rest_headers(), verify=False)
+        return mm_util.parse_rest_response(r.text)
 
     def create_trace_flag(self, payload):
         if 'ScopeId' not in payload:
@@ -443,12 +550,20 @@ class MavensMateClient(object):
         return headers
 
     def get_tooling_url(self):
-        pod = self.metadata_server_url.replace("https://", "").split("-")[0]
+        pod = self.metadata_server_url.replace("https://", "")
+        pod = pod.split('.salesforce.com')[0]
         return "https://{0}.salesforce.com/services/data/v{1}/tooling".format(pod, mm_util.SFDC_API_VERSION)
 
     def __get_partner_client(self):
+        wsdl_location = os.path.join(mm_util.WSDL_PATH, 'partner.xml')
+        try:
+            if os.path.exists(os.path.join(config.connection.project.location,'config','partner.xml')):
+                wsdl_location = os.path.join(config.connection.project.location,'config','partner.xml')
+        except:
+            pass
+
         return SforcePartnerClient(
-            wsdl_path+'/partner.xml', 
+            wsdl_location, 
             apiVersion=mm_util.SFDC_API_VERSION, 
             environment=self.org_type, 
             sid=self.sid, 
@@ -456,8 +571,15 @@ class MavensMateClient(object):
             server_url=self.endpoint)
 
     def __get_metadata_client(self):
+        wsdl_location = os.path.join(mm_util.WSDL_PATH, 'metadata.xml')
+        try:
+           if os.path.exists(os.path.join(config.connection.project.location,'config','metadata.xml')):
+               wsdl_location = os.path.join(config.connection.project.location,'config','metadata.xml')
+        except:
+           pass
+
         return SforceMetadataClient(
-            wsdl_path+'/metadata.xml', 
+            wsdl_location, 
             apiVersion=mm_util.SFDC_API_VERSION, 
             environment=self.org_type, 
             sid=self.sid, 
@@ -465,8 +587,15 @@ class MavensMateClient(object):
             server_url=self.endpoint)
 
     def __get_apex_client(self):
+        wsdl_location = os.path.join(mm_util.WSDL_PATH, 'apex.xml')
+        try:
+            if os.path.exists(os.path.join(config.connection.project.location,'config','apex.xml')):
+                wsdl_location = os.path.join(config.connection.project.location,'config','apex.xml')
+        except:
+            pass
+
         return SforceApexClient(
-            wsdl_path+'/apex.xml', 
+            wsdl_location, 
             apiVersion=mm_util.SFDC_API_VERSION, 
             environment=self.org_type, 
             sid=self.sid, 
@@ -474,8 +603,15 @@ class MavensMateClient(object):
             server_url=self.endpoint)
 
     def __get_tooling_client(self):
+        wsdl_location = os.path.join(mm_util.WSDL_PATH, 'tooling.xml')
+        try:
+            if os.path.exists(os.path.join(config.connection.project.location,'config','tooling.xml')):
+                wsdl_location = os.path.join(config.connection.project.location,'config','tooling.xml')
+        except:
+            pass
+
         return SforceToolingClient(
-            wsdl_path+'/tooling.xml', 
+            wsdl_location, 
             apiVersion=mm_util.SFDC_API_VERSION, 
             environment=self.org_type, 
             sid=self.sid, 

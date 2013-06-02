@@ -12,6 +12,7 @@ import base64
 import zipfile
 import time
 import subprocess
+import datetime
 import threading
 import sys
 import re
@@ -23,7 +24,9 @@ import jinja2.ext
 import jinja2htmlcompress
 from jinja2htmlcompress import HTMLCompress
 
-SFDC_API_VERSION = "26.0" #is overridden upon instantiation of mm_connection if plugin specifies mm_api_version
+TOOLING_API_EXTENSIONS = ['cls', 'trigger', 'page', 'component']
+
+SFDC_API_VERSION = "27.0" #is overridden upon instantiation of mm_connection if plugin specifies mm_api_version
 
 PRODUCTION_ENDPOINT = "https://www.salesforce.com/services/Soap/u/"+SFDC_API_VERSION
 SANDBOX_ENDPOINT    = "https://test.salesforce.com/services/Soap/u/"+SFDC_API_VERSION
@@ -32,6 +35,8 @@ PRERELEASE_ENDPOINT = "https://prerellogin.pre.salesforce.com/services/Soap/u/"+
 PRODUCTION_ENDPOINT_SHORT = "https://www.salesforce.com"
 SANDBOX_ENDPOINT_SHORT    = "https://test.salesforce.com"
 PRERELEASE_ENDPOINT_SHORT = "https://prerellogin.pre.salesforce.com"
+
+WSDL_PATH = config.base_path + "/lib/wsdl" #this can be overridden by client settings or request parameter
 
 ENDPOINTS = {
     "production" : PRODUCTION_ENDPOINT,
@@ -50,20 +55,26 @@ template_path = config.base_path + "/lib/templates"
 
 env = Environment(loader=FileSystemLoader(template_path),trim_blocks=True)
 
+
+def get_timestamp():
+    ts = time.time()
+    return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d-%H:%M:%S')
+
 def parse_json_from_file(location):
+    if not os.path.exists(location):
+        return {}
     try:
-        if os.path.exists(location):
-            json_data = open(location)
-            if json_data:
-                data = json.load(json_data)
-                json_data.close()
-                return data
-        else:
-            return {}
+        json_data = open(location)
+        if json_data:
+            data = json.load(json_data)
+            json_data.close()
+            return data
     except:
         return parse_json(location)
 
 def parse_xml_from_file(location):
+    if not os.path.exists(location):
+        return {}
     try:
         xml_data = open(location)
         data = xmltodict.parse(xml_data,postprocessor=xmltodict_postprocessor)
@@ -146,14 +157,24 @@ def zip_directory(directory_to_zip, where_to_put_zip_file=tempfile.gettempdir(),
         return base64_zip
 
 def extract_base64_encoded_zip(encoded, where_to_extract):
+    zip_path = os.path.join(where_to_extract,"metadata.zip")
     #write file to disk
     data = base64.b64decode(encoded)
-    src = open(where_to_extract+"/metadata.zip", "w")
+    src = open(zip_path, "w")
     src.write(data)
     src.close()
-    #extract file from disk
-    with zipfile.ZipFile(where_to_extract+"/metadata.zip", "r") as z:
-        z.extractall(where_to_extract)
+    #extract file from disk - z.extractall(where_to_extract) fails with non ascii chars
+    f = zipfile.ZipFile(zip_path, 'r')
+    for fileinfo in f.infolist():
+        path = where_to_extract
+        directories = fileinfo.filename.decode('utf8').split('/')
+        for directory in directories:
+            path = os.path.join(path, directory)
+            if directory == directories[-1]: break # the file
+            if not os.path.exists(path):
+                os.makedirs(path)
+        outputfile = open(path, "wb")
+        shutil.copyfileobj(f.open(fileinfo.filename), outputfile)
     #remove zip file
     os.remove(where_to_extract+"/metadata.zip")
 
@@ -175,15 +196,6 @@ def xmltodict_postprocessor(path, key, value):
         # OrderedDict([(u'a', OrderedDict([(u'b:int', [1, 2]), (u'b', u'x')]))])
 
 def parse_json(filename):
-    """ Parse a JSON file
-        First remove comments and then use the json module package
-        Comments look like :
-            // ...
-        or
-            /*
-            ...
-            */
-    """
     # Regular expression for comments
     comment_re = re.compile(
         '(^)?[^\S\n]*/(?:\*(.*?)\*/[^\S\n]*|/[^\n]*)($)?',
@@ -318,6 +330,7 @@ def parse_manifest(location):
 def generate_ui(operation,params={}):
     template_path = config.base_path + "/lib/ui/templates"
     env = Environment(loader=FileSystemLoader(template_path),trim_blocks=True)
+    env.globals['play_sounds'] = play_sounds
     temp = tempfile.NamedTemporaryFile(delete=False, prefix="mm")
     if operation == 'new_project':
         template = env.get_template('/project/new.html')
@@ -451,6 +464,9 @@ def generate_html_response(operation, obj, params):
         html = template.render(metadata=org_metadata)
     return html
 
+def play_sounds():
+    return config.connection.get_plugin_client_setting('mm_play_sounds', False)
+
 def does_file_exist(api_name, metadata_type_name):
     metadata_type = get_meta_type_by_name(metadata_type_name)
     if os.path.isfile(config.connection.project.location+"/src/"+metadata_type['directoryName']+"/"+api_name+"."+metadata_type['suffix']):
@@ -541,6 +557,9 @@ def process_unit_test_result(result):
     classes = []
 
     if 'codeCoverage' in result:
+        # for single results we don't get a list back
+        if type(result['codeCoverage']) is not list:
+            result['codeCoverage'] = [result['codeCoverage']]
         for coverage_result in result['codeCoverage']:
             if 'locationsNotCovered' in coverage_result and type(coverage_result['locationsNotCovered']) is not list:
                 coverage_result['locationsNotCovered'] = [coverage_result['locationsNotCovered']]
@@ -552,13 +571,13 @@ def process_unit_test_result(result):
                     percent_covered = int(round(100 * ((float(locations) - float(locations_not_covered)) / locations)))
                 coverage_result['percentCovered'] = percent_covered
                 if percent_covered < 40:
-                    coverage_result['coverageLevel'] = 'low'
+                    coverage_result['coverageLevel'] = 'danger'
                 elif percent_covered >= 40 and percent_covered < 75:
-                    coverage_result['coverageLevel'] = 'medium'
+                    coverage_result['coverageLevel'] = 'warning'
                 elif percent_covered >= 75:
-                    coverage_result['coverageLevel'] = 'high'
+                    coverage_result['coverageLevel'] = 'success'
                 else:
-                    coverage_result['coverageLevel'] = ''
+                    coverage_result['coverageLevel'] = 'info'
 
             if 'type' in coverage_result:
                 if coverage_result['type'] == 'Trigger':
@@ -572,10 +591,10 @@ def process_unit_test_result(result):
                 else:
                     classes.append(coverage_result)
 
-    if 'codeCoverageWarnings' in result and type(result['codeCoverageWarnings']) is not list:
-        result['codeCoverageWarnings'] = [result['codeCoverageWarnings']]
-
     if 'codeCoverageWarnings' in result:
+        # for single results we don't get a list back
+        if type(result['codeCoverageWarnings']) is not list:
+            result['codeCoverageWarnings'] = [result['codeCoverageWarnings']]
         for warning in result['codeCoverageWarnings']:
             if 'name' in warning and type(warning['name']) is not str and type(warning['name']) is not unicode:
                warning['name'] = None 
@@ -584,6 +603,7 @@ def process_unit_test_result(result):
     #{"foo"=>[{:name = "foobar"}{:name = "something else"}], "bar"=>[]}
     pass_fail = {}
     if 'successes' in result:
+        # for single results we don't get a list back
         if type(result['successes']) is not list:
             result['successes'] = [result['successes']]
         for success in result['successes']:
@@ -602,6 +622,7 @@ def process_unit_test_result(result):
                 results_normal[success['name']] = arr #replace the key
     
     if 'failures' in result:
+        # for single results we don't get a list back
         if type(result['failures']) is not list:
             result['failures'] = [result['failures']]
         for failure in result['failures']:

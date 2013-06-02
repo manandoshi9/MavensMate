@@ -16,6 +16,7 @@ class MavensMatePluginConnection(object):
     PluginClients = enum(SUBLIME_TEXT_2='SUBLIME_TEXT_2', SUBLIME_TEXT_3='SUBLIME_TEXT_3', NOTEPAD_PLUS_PLUS='NOTEPAD_PLUS_PLUS', TEXTMATE='TEXTMATE')
     
     def __init__(self, params={}, **kwargs):
+        config.connection = self
         params = dict(params.items() + kwargs.items())
 
         self.operation              = params.get('operation', None)
@@ -31,22 +32,28 @@ class MavensMatePluginConnection(object):
 
         self.project_location       = None
         if self.project_name != None:
-            self.project_location = self.workspace+"/"+self.project_name
+            self.project_location = os.path.join(self.workspace,self.project_name)
         self.project_id             = params.get('project_id', None)
         self.project                = None
         self.sfdc_api_version       = self.get_sfdc_api_version()
         self.ui                     = params.get('ui', False) #=> whether this connection was created for the purposes of generating a UI
         self.chrome                 = self.get_chrome();
         self.sublime                = self.get_sublime();
+
+        if 'wsdl_path' in params:
+            mm_util.WSDL_PATH = params.get('wsdl_path')
+
         self.setup_logging()
 
         if self.sfdc_api_version != None:
             mm_util.SFDC_API_VERSION = self.sfdc_api_version #setting api version based on plugin settings
 
         if self.operation != 'new_project' and self.operation != 'upgrade_project' and self.operation != 'new_project_from_existing_directory' and self.project_location != None:
-            if not os.path.exists(self.project_location+"/config/.settings"):
+            if not os.path.exists(os.path.join(self.project_location)):
+                raise MMException('Could not find project in workspace: '+self.workspace)
+            if not os.path.exists(os.path.join(self.project_location,"config",".settings")):
                 raise MMException('This does not seem to be a valid MavensMate project, missing config/.settings')
-            if not os.path.exists(self.project_location+"/src/package.xml"):
+            if not os.path.exists(os.path.join(self.project_location,"src","package.xml")):
                 raise MMException('This does not seem to be a valid MavensMate project, missing package.xml')
       
         if self.project_name != None and self.project_name != '' and not os.path.exists(self.project_location) and self.operation != 'new_project_from_existing_directory' and self.operation != 'new_project':
@@ -86,6 +93,14 @@ class MavensMatePluginConnection(object):
 
     #returns the workspace for the current connection (/Users/username/Workspaces/MavensMate)
     def get_workspace(self):
+        mm_workspace_setting = self.get_plugin_client_setting('mm_workspace')
+        if mm_workspace_setting == None or mm_workspace_setting == '':
+            raise MMException("Please set mm_workspace to the location where you'd like your mavensmate projects to reside")
+        elif not os.path.exists(mm_workspace_setting):
+            try:
+                os.makedirs(mm_workspace_setting)
+            except:
+                raise MMException("Unable to create mm_workspace location")
         return self.get_plugin_client_setting('mm_workspace')
 
     def get_chrome(self):
@@ -101,9 +116,15 @@ class MavensMatePluginConnection(object):
 
         settings = {}
         if not user_path == None:
-            settings['user'] = mm_util.parse_json_from_file(user_path)
+            try:
+                settings['user'] = mm_util.parse_json_from_file(user_path)
+            except:
+                config.logger.debug('User settings could not be loaded')
         if not def_path == None:
-            settings['default'] = mm_util.parse_json_from_file(def_path)
+            try:
+                settings['default'] = mm_util.parse_json_from_file(def_path)
+            except:
+                raise MMException('Could not load default MavensMate settings.')
         return settings
 
     def get_plugin_settings_path(self, type="User", obj="mavensmate.sublime-settings"):
